@@ -13,10 +13,14 @@ class MultiAgentEnv(gym.Env):
 
     def __init__(self, world, reset_callback=None, reward_callback=None,
                  observation_callback=None, info_callback=None,
-                 done_callback=None, shared_viewer=True):
+                 done_callback=None, shared_viewer=True, dict_mode=True):
+        print(world)
 
         self.world = world
         self.agents = self.world.policy_agents
+        if dict_mode:
+            from collections import OrderedDict
+            self.agents = OrderedDict({f'agent{i}': j for i, j in enumerate(self.agents)})
         # set required vectorized gym env property
         self.n = len(world.policy_agents)
         # scenario callbacks
@@ -34,11 +38,13 @@ class MultiAgentEnv(gym.Env):
         # if true, every agent has the same reward
         self.shared_reward = world.collaborative if hasattr(world, 'collaborative') else False
         self.time = 0
-
+        self.dict_mode = dict_mode
         # configure spaces
         self.action_space = []
         self.observation_space = []
-        for agent in self.agents:
+        
+        __agents = self.agents.values() if dict_mode else self.agents
+        for agent in __agents:
             total_action_space = []
             # physical action space
             if self.discrete_action_space:
@@ -68,6 +74,9 @@ class MultiAgentEnv(gym.Env):
             obs_dim = len(observation_callback(agent, self.world))
             self.observation_space.append(spaces.Box(low=-np.inf, high=+np.inf, shape=(obs_dim,), dtype=np.float32))
             agent.action.c = np.zeros(self.world.dim_c)
+        if dict_mode:
+            self.observation_space = spaces.Dict({f"agent{i}": obs  for i, obs in enumerate(self.observation_space)})
+            self.action_space = spaces.Dict({f"agent{i}": obs  for i, obs in enumerate(self.action_space)})
 
         # rendering
         self.shared_viewer = shared_viewer
@@ -85,21 +94,28 @@ class MultiAgentEnv(gym.Env):
         self.agents = self.world.policy_agents
         # set action for each agent
         for i, agent in enumerate(self.agents):
-            self._set_action(action_n[i], agent, self.action_space[i])
+            idx = f'agent{i}' if self.dict_mode else i
+            self._set_action(action_n[idx], agent, self.action_space[idx])
         # advance world state
         self.world.step()
         # record observation for each agent
-        for agent in self.agents:
+        for i, agent in enumerate(self.agents):
             obs_n.append(self._get_obs(agent))
             reward_n.append(self._get_reward(agent))
             done_n.append(self._get_done(agent))
-
             info_n['n'].append(self._get_info(agent))
 
         # all agents get total reward in cooperative case
         reward = np.sum(reward_n)
         if self.shared_reward:
             reward_n = [reward] * self.n
+
+        if self.dict_mode:
+            obs_n = {f'agent{i}': j for i, j in enumerate(obs_n)}
+            reward_n = {f'agent{i}': j for i, j in enumerate(reward_n)}
+            done_n = {f'agent{i}': j for i, j in enumerate(done_n)}
+            info_n = {f'agent{i}': self._get_info(j) for i, j in enumerate(self.agents)}
+            done_n['__all__'] = np.all(list(done_n.values()))
 
         return obs_n, reward_n, done_n, info_n
 
@@ -113,6 +129,8 @@ class MultiAgentEnv(gym.Env):
         self.agents = self.world.policy_agents
         for agent in self.agents:
             obs_n.append(self._get_obs(agent))
+        if self.dict_mode:
+            obs_n = {f'agent{i}': j for i, j in enumerate(obs_n)}
         return obs_n
 
     # get info used for benchmarking
